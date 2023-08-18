@@ -1,0 +1,921 @@
+<!DOCTYPE html> 
+<html>
+
+<head>
+
+<meta charset="utf-8"/>
+<title>&#127824;nashi</title>
+
+<style>
+body { background:WhiteSmoke; overflow:auto;}
+
+polygon {opacity: .2;}
+
+/*Colours for line polygons. Order is important for overwrites!*/
+polygon.empty {fill:Salmon;}
+polygon.ocr {fill:Blue;}
+polygon.gt {fill:Green;}
+polygon.edit {fill:Red;}
+polygon.comment {opacity: .8; fill-opacity:.2; stroke:Red;stroke-width:.4em;stroke-dasharray:5,5;}
+
+polygon.region{opacity: 0;}
+polygon.region:hover {cursor:crosshair;}
+polygon.select {fill:Black}
+
+
+circle.pointhandle {opacity:1;}
+circle.pointhandle:hover {cursor:move;}
+circle.lastmoved {fill:Red;}
+
+line.linehandle:hover {cursor:copy;}
+
+#selectlayer {opacity:0;}
+#selectlayer:hover {cursor:crosshair;}
+
+#editor {position: absolute; background: white; width: 880px;}
+#svg0 {display:none;}
+
+#inputbox {display:none; background: whitesmoke; padding: 2px; font-family: Andron Scriptor Web;}
+#inputline {
+	background:White;
+	white-space:nowrap;
+	padding-left:1px;
+	padding-right:1px;
+}
+#commentline {	
+	min-height: 1.25em; 
+	display: none;
+	background: yellow;
+	direction: ltr;
+	padding-left: 1px;
+	padding-right: 1px;
+}
+#vkeyboard {display:none; font-size:150%}
+/*#inputline:focus {outline: solid 2px red;}*/
+</style>
+
+<script>
+
+// virtual keyboard, max 10 entries per char
+virtualkeyboard = {
+"a": ["ä", "ā", "æ", "aͩ", "aͦ", "ȧ"],
+"b": ["b᷎",	"b"],
+"c": ["c̄", "cͣ"],
+"d": ["d᷎", "", "dͭ"],
+"e": ["ē", "ę", "eͥ"],
+"g": ["ḡ", "g̊", "gͥ"],
+"h": ["h̊", "h̄", "ḣ", "h̃"],
+"i": ["ī", "iͥ"],
+"l": ["ł"],
+"m": [""],
+"n": [""],
+"o": ["ō", "œ"],
+"p": ["", "p̃",	"ꝑ", "ꝓ"],
+"q": ["qᷓ", "q̄", "q", "ꝗ", "ꝗᷓ", "q̊",	"q̈", "ꝙ", "ꝙᷓ", ""],
+"r": ["r̄"],
+"t": ["t"],
+"u": ["ū"],
+"v": ["ꝟ", "v᷎", "v"],
+"w": ["wͭ"],
+"x": ["x̄"],
+"y": [""],
+"1": ["¹"],
+"2": ["²"],
+"3": ["³"],
+"4": ["⁴"],
+"5": ["⁵"],
+"6": ["⁶"],
+"7": ["⁷"],
+"8": ["⁸"],
+"9": ["⁹"],
+"0": ["⁰"]
+};
+
+function $(sel) {
+  return document.querySelector(sel);
+}
+
+/////// EDIT MODE
+// delete line from pagexml
+function deleteline(id){
+	var line = pagexml.getElementById(id);
+	line.parentElement.removeChild(line);
+}
+
+// create new line in pagexml
+function createline(id, rid){
+    var ns = pagexml.firstChild.attributes.xmlns.value;
+	var regionxml = pagexml.getElementById(rid);
+	var newline = pagexml.createElementNS(ns, "TextLine");
+	newline.setAttribute("id", id);
+	var newcoords = pagexml.createElementNS(ns, "Coords");
+	newcoords.setAttribute("points", $("#"+id).getAttribute("points"));
+	newline.appendChild(newcoords);
+	regionxml.appendChild(newline);
+}
+
+// write points to pagexml
+function writepoints(id){
+	var coordsxml = pagexml.getElementById(id).getElementsByTagName("Coords")[0];
+	coordsxml.setAttribute("points", $("#"+id).getAttribute("points"));
+}
+
+// calculate point on image from event
+function getimgpoint(evt){
+	var p = $("#svg0").createSVGPoint();
+	p.x = evt.clientX
+	p.y = evt.clientY
+	var m = evt.target.getScreenCTM();
+	p = p.matrixTransform(m.inverse());
+	p.x = Math.round(p.x);
+	p.y = Math.round(p.y);
+	return p;
+}
+
+// remove all point handles
+function removeallpointhandles(){
+	var pgroup = $("#pointhandles");
+	if (pgroup){
+		$("#group").removeChild(pgroup);
+	}
+}
+
+// move point handle around
+function dragcircle(evt, pid){
+	var handle = document.getElementsByClassName("movehandle")[0];
+	var imgcursor = getimgpoint(evt);
+	handle.setAttribute("cx", imgcursor.x);
+	handle.setAttribute("cy", imgcursor.y);
+	activeppoint.x = imgcursor.x;
+	activeppoint.y = imgcursor.y;
+}
+
+// delete point
+function delpoint(point){
+	$("#pointhandles").removeChild(point);
+	var plist = document.getElementsByClassName("edit")[0].points;
+	for (var i=0; i<plist.length; i++){
+		if (plist[i] == activeppoint){plist.removeItem(i);}
+	}
+	if (plist.length < 3){
+		delpolygon($("#"+document.getElementsByClassName("edit")[0].id));
+	} else {
+		writepoints(document.getElementsByClassName("edit")[0].id);
+		editpoly($("#"+document.getElementsByClassName("edit")[0].id));
+	}
+}
+
+// delete all "lastmoved" points
+function delactivepoints(){
+	var phandles = document.getElementsByClassName("pointhandle");
+	for (var i = phandles.length; i--;){
+		var phandle = phandles[i];
+		if (phandle.classList.contains("lastmoved")){
+			var plist = document.getElementsByClassName("edit")[0].points;
+			for (var j=plist.length; j--;){
+				if (phandle.cx.baseVal.value === plist[j].x && phandle.cy.baseVal.value === plist[j].y){
+					plist.removeItem(j);
+				}
+			}
+		phandle.parentElement.removeChild(phandle);
+		}
+	}
+	var plist = document.getElementsByClassName("edit")[0].points;	
+	if (plist.length < 3){
+		delpolygon($("#"+document.getElementsByClassName("edit")[0].id));
+	} else {
+		writepoints(document.getElementsByClassName("edit")[0].id);
+		editpoly($("#"+document.getElementsByClassName("edit")[0].id));
+	}
+}
+
+// delete polygon
+function delpolygon(polygon){
+	removeallpointhandles();
+	while (document.getElementsByClassName("linehandle").length){
+		$("#pointhandles").removeChild(document.getElementsByClassName("linehandle")[0]);
+	}
+	$("#group").removeChild(polygon);
+	deleteline(polygon.id);
+}
+
+// create new polygon
+function drawline(evt, pid){
+	var pp = $("#"+pid).points;
+	var pos = getimgpoint(evt);
+	pp[1].x = pp[2].x = pos.x;
+	pp[3].y = pp[2].y = pos.y;
+}
+
+// on mouseup (region)
+function unclickregion(evt, pid, rid){
+	$("#group").removeAttribute("onmousemove");
+	$("#group").removeAttribute("onmouseup");
+	createline(pid, rid);
+	editpoly($("#"+pid));
+}
+
+// on mousedown (region)
+function clickregion(evt, region){
+	var startp = getimgpoint(evt);
+	var existing = [];
+	var lengths = [];
+	for (p of $("#group").getElementsByTagName("polygon")){
+		if (p.id.startsWith(evt.target.id + "_")){
+			existing.push(p.id.split("_l")[1]);
+			lengths.push(p.id.split("_l")[1].length);
+		}
+	}
+	var lineno = Math.max(...existing) + 1;
+	var len = Math.min(...lengths);
+    var svgns = $("#svg0").attributes.xmlns.value;
+    
+	var newelement = document.createElementNS(svgns, 'polygon');
+	newelement.setAttribute("id",evt.target.id + "_l" + lineno.toString().padStart(len, "0"));
+	newelement.setAttribute("points",([startp.x,startp.y].join()+" ").repeat(4).slice(0,-1));
+	newelement.setAttribute("onclick","editpoly(this)");
+	newelement.classList.add("line");
+	newelement.classList.add("empty");
+	$("#group").appendChild(newelement);
+	$("#group").setAttribute("onmousemove","drawline(evt, '"+newelement.id+"')");
+	$("#group").setAttribute("onmouseup","unclickregion(evt, '"+newelement.id+"', '"+region.id+"')");
+}
+
+// on mouseup (point)
+function unclickpoint(evt, pid){
+	$("#group").removeAttribute("onmousemove");
+	$("#group").removeAttribute("onmouseup");
+	$("#editor").style.cursor = "auto";
+	for (p of document.getElementsByClassName("movehandle")){p.classList.remove("movehandle");}
+	while (document.getElementsByClassName("linehandle").length){
+		$("#pointhandles").removeChild(document.getElementsByClassName("linehandle")[0]);
+	}
+	linehandles($("#"+pid), $("#pointhandles"));
+	writepoints(pid);
+}
+
+// on mousdown (point)
+function clickpoint(evt, handle, pid){
+	for (p of $("#"+pid).points){
+		if (p.x == handle.getAttribute("cx") && p.y == handle.getAttribute("cy")){
+			var polypoint = p;
+		} 
+	}
+	if (polypoint == null){return null};
+	$("#"+handle.id).classList.add("movehandle");
+	for (p of document.getElementsByClassName("lastmoved")){p.classList.remove("lastmoved");}
+	$("#"+handle.id).classList.add("lastmoved");
+	$("#group").setAttribute("onmouseup","unclickpoint(evt, '"+pid+"')");
+	$("#group").setAttribute("onmousemove", "dragcircle(evt, '"+pid+"')");
+	activepoint = handle;
+	activeppoint = polypoint;
+	$("#editor").style.cursor = "move";
+}
+
+// on mousedown (border)
+function clickborder(evt, line, pid, pno){
+	var pos = getimgpoint(evt);
+	var polygon = $("#"+pid);
+	var svgns = $("#svg0").attributes.xmlns.value;
+	var newelement = document.createElementNS(svgns, 'circle');
+	var radius = 0.3 / ($("#editor").offsetWidth / $("#image").getAttribute("width")) + "em";
+	newelement.setAttribute("id", pid+"_p"+polygon.points.length);
+	newelement.setAttribute("class","pointhandle");
+	newelement.setAttribute("cx",pos.x);
+	newelement.setAttribute("cy",pos.y);
+	newelement.setAttribute("r", radius);
+	newelement.setAttribute("onmousedown","clickpoint(evt, this, '"+pid+"')");
+	$("#pointhandles").appendChild(newelement);
+
+	polygon.points.insertItemBefore(pos, pno);
+	clickpoint(evt, newelement, pid);
+}
+
+// draw handles on polygon border
+function linehandles(polygonin, groupin){
+	var group = $("#"+groupin.id);
+	var svgns = $("#svg0").attributes.xmlns.value;
+	var polygon = $("#"+polygonin.id);
+	var radius = 0.3 / ($("#editor").offsetWidth / $("#image").getAttribute("width")) + "em";
+	for (var n = 0; n < polygon.points.length; n++){
+		var newelement = document.createElementNS(svgns, 'line');
+		newelement.setAttribute("class", "linehandle");
+		newelement.setAttribute("x1", polygon.points[n].x);
+		newelement.setAttribute("y1", polygon.points[n].y);
+		newelement.setAttribute("x2", polygon.points[(n+1)%polygon.points.length].x);
+		newelement.setAttribute("y2", polygon.points[(n+1)%polygon.points.length].y);		
+		newelement.setAttribute("stroke-width", radius);
+		newelement.setAttribute("stroke", "transparent");
+		newelement.setAttribute("onmousedown","clickborder(evt, this, '"+polygon.id+"', '"+((n+1)%polygon.points.length)+"')");
+		group.insertBefore(newelement, group.children[0]);
+	}
+}
+
+// delete selction rectangle
+function colselection(evt){
+	$("#pointhandles").removeChild($("#select"));
+}
+
+// draw rectangle around points and makr them ".lastmoved"
+function drawselection(evt){
+	if ($("#select")){
+		var pp = $("#select").points;
+		var pos = getimgpoint(evt);
+		pp[1].x = pp[2].x = pos.x;
+		pp[3].y = pp[2].y = pos.y;
+		var xr = [pp[0].x, pos.x].sort(function(a, b){return a-b});
+		var yr = [pp[0].y, pos.y].sort(function(a, b){return a-b});
+		for (var phand of document.getElementsByClassName("pointhandle")){
+			var px = phand.cx.baseVal.value;
+			var py = phand.cy.baseVal.value;
+			if (xr[0] < px && px < xr[1] && yr[0] < py && py < yr[1]){
+				phand.classList.add("lastmoved");
+			} else {
+				phand.classList.remove("lastmoved");
+			}
+		}
+	}
+}
+
+// start selecting points
+function selectpoints(evt, layer){
+	var startp = getimgpoint(evt);
+    var svgns = $("#svg0").attributes.xmlns.value;
+	var newelement = document.createElementNS(svgns, 'polygon');
+	newelement.setAttribute("id", "select");
+	newelement.setAttribute("points",([startp.x,startp.y].join()+" ").repeat(4).slice(0,-1));
+	newelement.classList.add("select");
+
+	$("#pointhandles").appendChild(newelement);
+	$("#selectlayer").setAttribute("onmouseup", "colselection(evt)");
+	$("#selectlayer").setAttribute("onmousemove", "drawselection(evt)");
+}
+
+// active handles on polygon; on click (polygon)
+function editpoly(polygon) {
+	var pid = polygon.getAttribute("id");
+	var svgns = $("#svg0").attributes.xmlns.value;
+	for (p of document.getElementsByClassName("edit")){p.classList.remove("edit");}
+	$("#"+polygon.id).classList.add("edit");
+	removeallpointhandles();
+	var newgroup = document.createElementNS(svgns, 'g');
+	newgroup.setAttribute("id","pointhandles");
+	$("#group").appendChild(newgroup);
+	linehandles(polygon, newgroup);
+	var radius = 0.3 / ($("#editor").offsetWidth / $("#image").getAttribute("width")) + "em";
+	for (var n = 0; n < polygon.points.length; n++){
+		var newelement = document.createElementNS(svgns, 'circle');
+		newelement.setAttribute("id", pid+"_p"+n);
+		newelement.setAttribute("class","pointhandle");
+		newelement.setAttribute("cx",polygon.points[n].x);
+		newelement.setAttribute("cy",polygon.points[n].y);
+		newelement.setAttribute("r", radius);
+		newelement.setAttribute("onmousedown","clickpoint(evt, this, '"+pid+"')");
+		newgroup.appendChild(newelement);
+	}
+}
+
+// initialize polygons around text regions
+function inittextregions() {
+    //textregions from file
+    var svgns = $("#svg0").attributes.xmlns.value;
+    var textregions = pagexml.getElementsByTagName("TextRegion");
+    for (var i=0; i<textregions.length; i++){
+        var points = textregions[i].getElementsByTagName("Coords")[0].getAttribute("points");
+        var id = textregions[i].id
+        var newelement = document.createElementNS(svgns, 'polygon');
+        newelement.setAttribute("id",id);
+        newelement.setAttribute("points",points);
+        newelement.setAttribute("onmousedown","clickregion(evt, this)");
+        newelement.classList.add("region");
+        $("#group").insertBefore(newelement, $("#group").children[1]);
+    }
+}
+
+// toggle editmode (mode=true on, mode=false off)
+function editmode(mode) {
+	for (var p of document.getElementsByClassName("line")){
+		if (mode) {
+			p.setAttribute("onclick","editpoly(this)");
+			inittextregions();
+		} else {
+			removeallpointhandles();
+			for (p of document.getElementsByClassName("edit")){
+				p.classList.remove("edit");
+			}
+			for (p of document.getElementsByClassName("line")){
+				p.setAttribute("onclick","clickline(this)");
+			}
+			while (document.getElementsByClassName("region").length){
+				$("#group").removeChild(document.getElementsByClassName("region")[0]);
+			}
+		}
+	} 	
+}
+
+/////// END EDIT MODE
+
+// zoom in to width of current line
+function zoomsvg() {
+	var points = $("#"+$("#inputline").getAttribute("currentid")).points;
+	var scale = $("#editor").offsetWidth / $("#image").getAttribute("width");
+	var xarr = [];
+    var yarr = [];
+    for (i=0;i<points.length;i++){
+            xarr.push(points[i]["x"]);
+        yarr.push(points[i]["y"]);
+    }
+    var xmin = Math.min.apply(Math, xarr);
+    var xmax = Math.max.apply(Math, xarr);
+    var ymin = Math.min.apply(Math, yarr);
+    var ymax = Math.max.apply(Math, yarr);
+    $("#svg1").viewBox.baseVal.x = xmin;
+	$("#svg1").viewBox.baseVal.width = xmax-xmin;
+	if ((ymax-ymin) / (xmax-xmin) > $("#svg1").height.baseVal.value / $("#svg1").width.baseVal.value) {
+		$("#svg1").height.baseVal.value = ((ymax-ymin) / (xmax-xmin)) * $("#svg1").width.baseVal.value;
+	}
+    $("#svg2").viewBox.baseVal.x = xmin;
+	$("#svg2").viewBox.baseVal.width = xmax-xmin;	
+	
+	var newscale = $("#editor").offsetWidth / (xmax-xmin);
+	$("#inputbox").style.paddingLeft = "2px";
+	$("#inputbox").style.paddingRight = "2px";
+	var scalefont = $("#inputbox").style.direction == "rtl" ? 0.6 : 1.1;
+    $("#inputbox").style["font-size"] = (ymax-ymin)*scalefont * newscale + "px";
+	if ($("#inputline").textContent) {
+		resizefont(newscale * (xmax-xmin));
+	}
+}
+
+// show svg0 in svg1 up to y, the rest in svg2
+function splitsvg(y) {
+    var img_x = $("#image").getAttribute("width");
+    var img_y = $("#image").getAttribute("height");
+    var scale = $("#editor").offsetWidth / img_x;
+    $("#svg1").setAttribute("viewBox", "0,0,"+img_x+"," + y);
+    $("#svg1").setAttribute("height", Math.round(scale * y));
+    $("#svg2").setAttribute("viewBox", "0,"+y+","+img_x+","+img_y);
+    $("#svg2").setAttribute("height", Math.round(scale * (img_y-y)));
+}
+
+// resize font size to improve alignment between text and image
+function resizefont(len) {
+    var fontsize = parseFloat($("#inputbox").style.fontSize.split("px")[0]);
+    var sizefac = len / $("#inputline").offsetWidth;
+    $("#inputbox").style.fontSize = sizefac * fontsize + "px";
+}
+
+// toggle visibility of input and set position under line
+function togglediv(min_x, max_x, min_y, max_y) {
+    var currentsplit = $("#svg1").viewBox.baseVal.height;
+    var scale = $("#editor").offsetWidth / $("#image").getAttribute("width");
+    $("#inputbox").style.display = $("#inputbox").style.display == "none" ? "block" : "none";
+    if ($("#inputbox").style.direction == "rtl"){
+        $("#inputbox").style.paddingRight = scale * ($("#image").getAttribute("width") - max_x) + "px";
+        $("#inputbox").style.paddingLeft = "2px";
+    } else {
+        $("#inputbox").style.paddingRight = "2px";
+        $("#inputbox").style.paddingLeft = scale * min_x + "px";
+    }
+    if (max_y != currentsplit){
+        splitsvg(max_y);
+        $("#inputbox").style.display = "block";
+        var scalefont = $("#inputbox").style.direction == "rtl" ? 0.6 : 1.1;
+        $("#inputbox").style["font-size"] = (max_y-min_y)*scalefont * scale + "px";
+		if ($('#inputline').textContent) {
+				resizefont(scale * (max_x-min_x));
+			}
+    } else {
+        splitsvg($("#image").getAttribute("height"));
+    }
+}
+
+// return pagexml namespace
+function resolver() {
+    return pagexml.firstChild.attributes.xmlns.value;
+}
+
+// get the lowest index of the TextEquivs for a line
+function get_lowest_index(lineid) {
+    var xpath = '//ns:TextLine[@id="'+lineid+'"]/ns:TextEquiv/@index[not(. > //ns:TextLine[@id="'+lineid+'"]/ns:TextEquiv/@index)]';
+    var res = pagexml.evaluate(xpath, pagexml, resolver, XPathResult.ANY_TYPE, null );
+    return res.iterateNext();
+}
+
+// get bounding box from line points, set text content and activate inputline
+function clickline(link) {
+    var inputline = $("#inputline");
+    if (link==null){return false;}
+    var polygon = link;
+    if (polygon==null){return false;}
+    // get points as array
+    var points = polygon.points;
+    var xarr = [];
+    var yarr = [];
+    for (i=0;i<points.length;i++){
+            xarr.push(points[i]["x"]);
+        yarr.push(points[i]["y"]);
+    }
+
+    // get and set text
+    var lindex = get_lowest_index(polygon.id);
+    var ix = lindex ? lindex.value : "0";
+    var textequiv = pagexml.getElementById(polygon.id).querySelector('TextEquiv[index="'+ix+'"]');
+    $("#inputline").textContent = textequiv ? textequiv.firstElementChild.textContent : "";
+
+    // get and set comments
+    var comment = pagexml.getElementById(polygon.id).attributes.comments;
+    $("#commentline").innerHTML = comment ? comment.value : "";    
+    $("#commentline").style.display = comment && comment.value ? "block" : "none";
+
+    // activate input
+    togglediv(Math.min.apply(Math, xarr), Math.max.apply(Math, xarr), 
+              Math.min.apply(Math, yarr), Math.max.apply(Math, yarr));
+    $("#inputline").focus();
+    $("#inputline").setAttribute("currentid", polygon.id);
+    //window.scrollBy(0, inputline.getBoundingClientRect().top - (window.innerHeight>>1));
+}
+
+// save current text input to pagexml
+function savetext() {
+    var ns = pagexml.firstChild.attributes.xmlns.value;
+    var cur = $("#inputline").getAttribute("currentid");
+    var xmlline = pagexml.getElementById(cur);
+    var textequiv = pagexml.createElementNS(ns, "TextEquiv");
+    var unicode = pagexml.createElementNS(ns, "Unicode");
+    var oldtextequiv = pagexml.getElementById(cur).querySelector('TextEquiv[index="0"]');
+    if (oldtextequiv){
+        xmlline.removeChild(oldtextequiv);
+    }
+    textequiv.setAttribute("index","0");
+    unicode.textContent = $("#inputline").textContent;
+    textequiv.appendChild(unicode);
+    xmlline.appendChild(textequiv);
+
+    // save comments
+    if ($("#commentline").style.display != "none" && document.activeElement.id == "commentline"){
+        savecomment();
+        // prevent subsequent blur event from saving next line
+        $("#commentline").setAttribute("dontsave", "true");
+    }    
+
+    clickline(document.getElementById(cur).nextSibling);
+    document.getElementById(cur).classList.add("gt");
+}
+
+// save comment (@ blur of comment line)
+function savecomment(e) {
+    if ($("#commentline").getAttribute("dontsave")){
+        // saving already done in savetext()
+        $("#commentline").removeAttribute("dontsave");
+    } else {
+        var cur = inputline.getAttribute("currentid");
+        var comment = $("#commentline").innerHTML;
+        if (comment) {
+            pagexml.getElementById(cur).setAttribute("comments", comment);
+            $("#"+cur).classList.add("comment");
+        } else {
+            pagexml.getElementById(cur).removeAttribute("comments");
+            $("#"+cur).classList.remove("comment");
+        }
+    }
+}
+
+// load the image file and initialize svg attributes
+function initpage(file, x, y, direction) {
+    $("body").style.direction = direction;
+    $("#inputbox").style.direction = direction;
+    $('#image').setAttribute("x","0"); 
+    $('#image').setAttribute("y","0");
+    $('#image').setAttribute("width",x);
+    $('#image').setAttribute("height",y);
+    $('#image').setAttribute('href', file);
+    // init split svgs
+    var scale = $("#editor").offsetWidth / x;
+    $("#svg1").setAttribute("width", scale * x)
+    $("#svg1").setAttribute("height", scale * y)
+    $("#svg1").setAttribute("viewBox", "0,0,+"+x+"," + y);
+    $("#svg1").setAttribute("preserveAspectRatio", "xMinYMax slice");
+    $("#svg2").setAttribute("width", scale * x);
+    $("#svg2").setAttribute("height", "0");
+    $("#svg2").setAttribute("preserveAspectRatio", "xMinYMin slice");
+}
+
+// initialize text line regions
+function initregions() {
+    //textregions from file
+    var svgns = $("#svg0").attributes.xmlns.value;
+    var textregions = pagexml.getElementsByTagName("TextLine");
+    for (var i=0; i<textregions.length; i++){
+        var points = textregions[i].getElementsByTagName("Coords")[0].getAttribute("points");
+        var id = textregions[i].id
+        var textequiv = textregions[i].querySelector('TextEquiv[index="0"]');
+        var ocr = textregions[i].querySelector('TextEquiv');
+        var comments = textregions[i].getAttribute("comments");
+        // create polygons around lines
+        var newelement = document.createElementNS(svgns, 'polygon');
+        newelement.setAttribute("id",id);
+        newelement.setAttribute("points",points);
+        newelement.setAttribute("onclick","clickline(this)");
+        newelement.classList.add("line");
+        var status = "empty";
+        if (textequiv){ status = "gt";
+            } else if (ocr){status = "ocr";}
+        newelement.classList.add(status);
+        if (comments){
+			newelement.classList.add("comment");
+		}
+        $("#group").appendChild(newelement);
+    }
+}
+
+// event handler for pagexml request
+function pagexmlOnload() {
+    pagexml = this.responseXML;
+    var folder = this.filename.substring(0, this.filename.lastIndexOf("/")+1);
+    var imgFile = pagexml.getElementsByTagName("Page")[0].attributes["imageFilename"].nodeValue;
+    imgFile = folder +  imgFile;
+    var image_x = pagexml.getElementsByTagName("Page")[0].attributes["imageWidth"].nodeValue;
+    var image_y = pagexml.getElementsByTagName("Page")[0].attributes["imageHeight"].nodeValue;
+    //init image width etc. and regions
+    initpage(imgFile, image_x, image_y, this.direction);
+    initregions();
+}
+
+// get xml file
+function getxml(filename, direction){
+    var xmlhttp=new XMLHttpRequest();
+    xmlhttp.direction = direction;
+    xmlhttp.filename = filename;
+    xmlhttp.open("GET", filename);
+    xmlhttp.setRequestHeader("Content-Type", "text/xml");
+    xmlhttp.addEventListener("load", pagexmlOnload);
+    xmlhttp.send();
+}
+
+// Get file and direction parameters from URL
+function uriparams() {
+    var vars = window.location.search.substring(1).split('&');
+    for (var i = 0; i < vars.length; i++) {
+        var pair = vars[i].split('=');
+        if (decodeURIComponent(pair[0]) == "pagexml") {
+            var filename =  decodeURIComponent(pair[1]);
+            }
+        if (decodeURIComponent(pair[0]) == "direction") {
+            var direction =  decodeURIComponent(pair[1]);
+            }
+        }
+    if (typeof(direction) == "undefined"){
+        var direction = "ltr";
+	var selfname = window.location.pathname.split("/").pop();
+    	history.pushState("", "", selfname + window.location.search + "&direction=" + direction);
+    }
+    return [filename, direction];
+}
+
+// send pagexml file as download
+function downloadxml() {
+    var filename = pagexml.URL.substr(pagexml.URL.lastIndexOf('/') + 1)
+    s = new XMLSerializer;
+    var string = s.serializeToString(pagexml);
+    var element = document.createElement('a');
+    element.setAttribute('href', 'data:text/xml;charset=utf-8,' + encodeURIComponent(string));
+    element.setAttribute('download', filename);
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+}
+
+// change writing direction
+function setdirection(dir) {
+    var filename = window.location.search.substring(window.location.search.lastIndexOf("pagexml=")+8).split("&")[0];
+    var ix = window.location.search.lastIndexOf("direction=");
+    if (ix > -1){
+        var searchstr  = window.location.search.substring(0, ix-1);
+    } else {
+        var searchstr = window.location.search;
+    }
+    var selfname = window.location.pathname.split("/").pop();
+    history.pushState("", "", selfname + searchstr + "&direction=" + dir);
+    $("body").style.direction = dir;
+    $("#inputbox").style.direction = dir;
+    togglediv(0, 0, 0, 0); // to close input line and reset margins   
+}
+
+// find number in filename, add value of variable dir and load new page
+function changepage(dir) {
+    $("#inputbox").style.display = "none";
+    if (dir) {
+        var filename = window.location.search.substring(window.location.search.lastIndexOf("pagexml=")+8).split("&")[0];
+        var numberpart = filename.match(/\d+/)[0];
+        var newnumber = (parseInt(numberpart) + dir).toString().padStart(numberpart.length, "0")
+        var newfilename = filename.slice(0, filename.indexOf(numberpart[0]))
+                            + newnumber
+                         + filename.slice(1+filename.lastIndexOf(numberpart.slice(-1)));
+        var url = document.URL.split("pagexml=");
+        var urlrest = url[1].slice(url[1].indexOf("&"));
+        var selfname = window.location.pathname.split("/").pop();
+        history.pushState("", "", selfname + "?pagexml=" + newfilename + urlrest);
+    }
+    var [filename, direction] = uriparams();
+    while ($("#group").childElementCount > 1){
+        $("#group").removeChild($("#group").getElementsByTagName("polygon")[0])    
+    }
+    $("#image").removeAttribute("href")
+    getxml(filename, direction);
+    splitsvg($("#image").height.baseVal.value);
+}
+
+function reload(e) {
+    changepage(0);
+}
+
+// keyboard shortcuts for text input
+function shortcuts(e) {
+    if (e.code == "ArrowUp" && e.shiftKey){
+        e.preventDefault();
+        $("#inputline").focus();
+    }
+
+    if (e.code == "ArrowDown" && e.shiftKey){
+        e.preventDefault();
+        $("#commentline").style.display = "block";
+        $("#commentline").focus();
+    }
+
+    if (e.code.startsWith("Digit") && $("#vkeyboard").style.display == "block"){
+        e.preventDefault();
+        var sel = window.getSelection();
+        var pos = sel.focusOffset -1;
+        var text = sel.focusNode.data;
+        if (pos < 0) pos = 0;
+        var char = text[pos];
+        if (char in virtualkeyboard){
+            var nmb = parseInt(e.code[5]);
+            if (nmb == 0){ nmb = 10; }
+            if (nmb > virtualkeyboard[char].length){ nmb = 1; }
+            var insert = virtualkeyboard[char][nmb-1];
+            sel.focusNode.data = text.slice(0,pos)+insert+text.slice(pos+1);
+            // reset caret
+            var range = document.createRange();
+            range.setStart(sel.focusNode, pos+insert.length);
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+
+    }
+
+    if (e.code == "Insert" && e.shiftKey){
+        e.preventDefault();
+        var sel = window.getSelection();
+        var pos = sel.focusOffset -1;
+        var text = sel.focusNode.data;
+        if (pos < 0) pos = 0;
+        var char = sel.focusNode.data[pos];
+        if (char in virtualkeyboard){
+            var alt = virtualkeyboard[char]
+            var displaykeys = "";
+            for (var i=0; i<alt.length; i++){
+                displaykeys += "¹²³⁴⁵⁶⁷⁸⁹⁰"[i] + alt[i] + " ";
+            }
+            $("#vkeyboard").innerText = displaykeys;
+            $("#vkeyboard").style.display = "block";
+        }
+    }
+
+    if (e.code == "Enter" && e.shiftKey){
+        e.preventDefault();
+        savetext();
+    }
+
+    if (e.code == "Enter" && document.activeElement.id == "inputline"){
+        e.preventDefault();
+    }
+    
+    if (e.code == "Tab"){
+        // save comments
+        if ($("#commentline").style.display != "none" && document.activeElement.id == "commentline"){
+            savecomment();
+            // prevent subsequent blur event from saving next line
+            $("#commentline").setAttribute("dontsave", "true");
+        }    
+        var cur = $("#inputline").getAttribute("currentid")
+        var link = document.getElementById(cur)
+        // End of page shout be caught here, not in clickline
+        if (e.shiftKey){
+                clickline(link.previousSibling);
+            }else{
+                clickline(link.nextSibling);
+            }
+        e.preventDefault();        
+        }
+}
+
+// Keyup shortcut to close toggle virtual keyboard
+function shortcuts_up(e) {
+    if (e.code == "Insert" && $("#vkeyboard").style.display != "none"){
+        $("#vkeyboard").style.display = "none";
+    }
+}
+
+// keyboard shortcuts(global
+function shortcuts_global(e) {
+	if (e.code == "Space" && e.ctrlKey){
+		e.preventDefault();
+		zoomsvg();
+	}
+    if (e.code == "KeyS" && e.ctrlKey){
+        e.preventDefault();
+        downloadxml();
+    }
+    if (e.code == "PageDown" && e.shiftKey){
+        e.preventDefault();
+        changepage(1);
+    }
+    if (e.code == "PageUp" && e.shiftKey){
+        e.preventDefault();
+        changepage(-1);
+    }
+    if (e.code == "ArrowRight" && e.shiftKey && e.ctrlKey){
+        e.preventDefault();
+        setdirection("rtl");
+    }
+    if (e.code == "ArrowLeft" && e.shiftKey && e.ctrlKey){
+        e.preventDefault();
+        setdirection("ltr");
+    }
+    if (e.code == "KeyE" && e.ctrlKey){
+        e.preventDefault();
+        editmode(document.getElementsByClassName("line")[0].attributes.onclick.value.startsWith("clickline"));
+    }
+    if (e.code == "Delete" && document.getElementsByClassName("lastmoved").length){
+		e.preventDefault();
+		delactivepoints();
+		//delpoint(document.getElementsByClassName("lastmoved")[0]);
+	} else if (e.code == "Delete" && document.getElementsByClassName("edit").length){
+		e.preventDefault();
+		delpolygon(document.getElementsByClassName("edit")[0]);
+	}
+
+	if (e.key == "Shift" && $("#pointhandles")){
+		var svgns = $("#svg0").attributes.xmlns.value;
+		var rect = document.createElementNS(svgns, 'rect');
+		rect.setAttribute("id", "selectlayer");
+		rect.setAttribute("x",0);
+		rect.setAttribute("y",0);
+		rect.setAttribute("width", $("#image").width.baseVal.value);
+		rect.setAttribute("height", $("#image").height.baseVal.value);
+		rect.setAttribute("onmousedown", "selectpoints(evt, this)");
+		$("#pointhandles").appendChild(rect);
+	}
+}
+
+function shortcuts_global_up(e) {
+	if (e.key == "Shift" && $("#selectlayer")){
+		if ($("#select")){	$("#pointhandles").removeChild($("#select"));}
+		$("#pointhandles").removeChild($("#selectlayer"));
+	}
+}
+
+
+//
+// Main function
+//
+function main() {
+    // Add event handlers
+    $("#inputbox").addEventListener("keydown", shortcuts, false);
+    $("#inputbox").addEventListener("keyup", shortcuts_up, false);
+    $("#commentline").addEventListener("blur", savecomment, false);
+    document.addEventListener("keydown", shortcuts_global, false);
+    document.addEventListener("keyup", shortcuts_global_up, false);
+    window.onpopstate = reload;
+    
+    // Get filename and dir, fetch pagexml
+    var [filename, direction] = uriparams();
+    getxml(filename, direction);
+}
+
+</script>
+</head>
+
+<body onload="main();">
+    <div id="editor">
+        <!-- invisible svg -->
+        <svg id="svg0" xmlns="http://www.w3.org/2000/svg">
+            <g id="group"><image id="image" height="0px" width="0px"/></g>
+        </svg>
+        <!-- upper part of svg -->
+        <svg id="svg1"><use href="#group"/></svg>
+        <!-- text input -->
+        <div id="inputbox">
+            <span id="inputline" contenteditable="true"></span>
+            <span id="commentline" contenteditable="true"></span>
+            <span id="vkeyboard"></span>
+        </div>
+        <!-- lower part of svg -->
+        <svg id="svg2"><use href="#group"/></svg>
+    </div> 
+</body>
+</html>
